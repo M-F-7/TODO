@@ -19,30 +19,12 @@ spec:
       - name: jupyter
         image: quay.io/jupyter/base-notebook:python-3.11.8
         imagePullPolicy: IfNotPresent
+        envFrom:
+        - secretRef:
+            name: app-env
         env:
         - name: JUPYTER_PORT
           value: "8888"
-        - name: JUPYTER_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: jupyter-secret
-              key: token
-        - name: MINIO_ENDPOINT
-          value: minio.storage.svc.cluster.local:9000
-        - name: MINIO_BUCKET
-          value: datasets
-        - name: MINIO_ROOT_USER
-          valueFrom:
-            secretKeyRef:
-              name: minio-secret
-              key: root-user
-              optional: true
-        - name: MINIO_ROOT_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: minio-secret
-              key: root-password
-              optional: true
         ports:
         - containerPort: 8888
           name: http

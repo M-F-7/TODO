@@ -18,3 +18,10 @@ metadata:
   name: ui
   labels:
     name: ui
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jupyter
+  labels:
+    name: jupyter

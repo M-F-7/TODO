@@ -1,4 +1,4 @@
-.PHONY: help install cluster build-images deploy deploy-storage deploy-api deploy-ui init clean status logs logs-api logs-ui stop start all
+.PHONY: help install cluster build-images deploy deploy-storage deploy-api deploy-ui deploy-jupyter init clean status logs logs-api logs-ui logs-jupyter stop start all
 
 # Variables
 CLUSTER_NAME=data-cluster
@@ -36,7 +36,8 @@ cluster: ## Crée le cluster k3d
 			--port 9000:9000@loadbalancer \
 			--port 9001:9001@loadbalancer \
 			--port 8000:8000@loadbalancer \
-			--port 8501:8501@loadbalancer; \
+			--port 8501:8501@loadbalancer \
+			--port 8888:8888@loadbalancer; \
 		echo "✓ Cluster créé"; \
 	fi
 
@@ -45,6 +46,7 @@ deploy: ## Déploie MinIO
 	@$(MAKE) build-images
 	@$(MAKE) deploy-api
 	@$(MAKE) deploy-ui
+	@$(MAKE) deploy-jupyter
 
 deploy-storage: ## Déploie MinIO
 	@echo "Déploiement de MinIO..."
@@ -87,6 +89,16 @@ deploy-ui: build-images ## Déploie l UI Streamlit dans le cluster
 	@echo "✓ UI soumise au cluster sur http://localhost:8501"
 	@echo "Verification: kubectl get pods -n ui"
 
+deploy-jupyter: ## Déploie JupyterLab dans le cluster
+	@echo "Déploiement de JupyterLab..."
+	@kubectl apply -f infrastructure/base/namespace.yaml
+	@./scripts/create-minio-secret.sh
+	@kubectl apply -f services/jupyter/jupyter-pvc.yaml
+	@kubectl apply -f services/jupyter/deployment.yaml
+	@kubectl apply -f services/jupyter/service.yaml
+	@echo "✓ JupyterLab soumis au cluster sur http://localhost:8888"
+	@echo "Verification: kubectl get pods -n jupyter"
+
 init: ## Initialise MinIO et upload les CSV
 	@echo "Initialisation de MinIO..."
 	@KUBECONFIG=$(KUBECONFIG) kubectl port-forward -n storage svc/minio 19000:9000 >/tmp/minio-port-forward.log 2>&1 & \
@@ -106,7 +118,8 @@ status: ## Affiche le statut
 	@printf "  MinIO Console : $(GREEN)%s$(NC)\n" "http://localhost:9001"
 	@printf "  MinIO API     : $(GREEN)%s$(NC)\n" "http://localhost:9000"
 	@printf "  FastAPI       : $(GREEN)%s$(NC)\n" "http://localhost:8000"
-	@printf "  Streamlit     : $(GREEN)%s$(NC)\n\n" "http://localhost:8501"
+	@printf "  Streamlit     : $(GREEN)%s$(NC)\n" "http://localhost:8501"
+	@printf "  JupyterLab    : $(GREEN)%s$(NC)\n\n" "http://localhost:8888"
 	@printf "$(BLUE)Nodes$(NC)\n"
 	@kubectl get nodes -o wide
 	@printf "\n$(BLUE)Pods$(NC)\n"
@@ -117,6 +130,7 @@ status: ## Affiche le statut
 	@printf "  storage/minio : " && kubectl get pods -n storage -l app=minio --no-headers 2>/dev/null | awk 'BEGIN{ok=0} /Running/ {ok=1} END{if(ok) print "$(GREEN)RUNNING$(NC)"; else print "$(YELLOW)NOT READY$(NC)"}'
 	@printf "  api/api       : " && kubectl get pods -n api -l app=api --no-headers 2>/dev/null | awk 'BEGIN{ok=0} /Running/ {ok=1} END{if(ok) print "$(GREEN)RUNNING$(NC)"; else print "$(YELLOW)NOT READY$(NC)"}'
 	@printf "  ui/ui         : " && kubectl get pods -n ui -l app=ui --no-headers 2>/dev/null | awk 'BEGIN{ok=0} /Running/ {ok=1} END{if(ok) print "$(GREEN)RUNNING$(NC)"; else print "$(YELLOW)NOT READY$(NC)"}'
+	@printf "  jupyter/lab   : " && kubectl get pods -n jupyter -l app=jupyter --no-headers 2>/dev/null | awk 'BEGIN{ok=0} /Running/ {ok=1} END{if(ok) print "$(GREEN)RUNNING$(NC)"; else print "$(YELLOW)NOT READY$(NC)"}'
 
 logs: ## Affiche les logs MinIO
 	@kubectl logs -n storage -l app=minio --tail=100 -f
@@ -126,6 +140,9 @@ logs-api: ## Affiche les logs de l API
 
 logs-ui: ## Affiche les logs de l UI
 	@kubectl logs -n ui -l app=ui --tail=100 -f
+
+logs-jupyter: ## Affiche les logs de JupyterLab
+	@kubectl logs -n jupyter -l app=jupyter --tail=100 -f
 
 stop: ## Arrête le cluster
 	@k3d cluster stop $(CLUSTER_NAME)
@@ -143,3 +160,4 @@ all: install cluster deploy init ## Installation complete du projet
 	@echo "Accès MinIO Console: http://localhost:9001"
 	@echo "API FastAPI: http://localhost:8000"
 	@echo "UI Streamlit: http://localhost:8501"
+	@echo "JupyterLab: http://localhost:8888"

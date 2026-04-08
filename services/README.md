@@ -10,6 +10,11 @@ services/
 │   ├── README.md
 │   ├── deployment.yaml
 │   └── service.yaml
+├── jupyter/          # Service JupyterLab
+│   ├── README.md
+│   ├── deployment.yaml
+│   ├── jupyter-pvc.yaml
+│   └── service.yaml
 ├── storage/          # Service de stockage (MinIO)
 │   ├── README.md
 │   ├── minio-pvc.yaml
@@ -31,6 +36,9 @@ Service backend qui lit les datasets dans MinIO et expose metadonnees et apercu.
 
 ### UI (Streamlit)
 Service frontend qui appelle l'API et affiche les datasets dans une interface simple.
+
+### JupyterLab
+Service notebook interactif pour explorer les donnees directement dans le cluster.
 
 ## Ajouter un nouveau service
 

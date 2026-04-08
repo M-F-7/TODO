@@ -13,6 +13,7 @@ make status
 # MinIO Console: http://localhost:9001
 # API: http://localhost:8000
 # UI: http://localhost:8501
+# JupyterLab: http://localhost:8888
 ```
 
 ## Credentials
@@ -24,11 +25,12 @@ Voir le fichier `.env` :
 ```bash
 make help       # Toutes les commandes
 make status     # État du cluster
-make deploy     # Déploie MinIO + API + UI
+make deploy     # Déploie MinIO + API + UI + JupyterLab
 make init       # Upload les CSV vers MinIO
 make logs       # Logs de MinIO
 make logs-api   # Logs de l API
 make logs-ui    # Logs de l UI
+make logs-jupyter # Logs de JupyterLab
 make stop       # Arrêter le cluster
 make start      # Démarrer le cluster
 make clean      # Tout supprimer

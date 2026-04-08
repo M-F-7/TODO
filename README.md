@@ -72,7 +72,7 @@ Le `Makefile` utilise cette meme methode si `uv` n'est pas deja installe.
 make help       # Affiche l'aide
 make install    # Installe les dépendances
 make cluster    # Crée le cluster k3d
-make deploy     # Déploie MinIO + API + UI
+make deploy     # Déploie MinIO + API + UI + JupyterLab
 make init       # Initialise MinIO et upload les CSV
 make status     # Affiche le statut
 make logs       # Affiche les logs MinIO
@@ -158,6 +158,7 @@ Le projet fournit maintenant :
 
 - une API `FastAPI` pour exposer les datasets et leurs metadonnees
 - une UI `Streamlit` pour parcourir ces donnees simplement
+- un service `JupyterLab` pour explorer les datasets dans un notebook
 
 ### Deployer l'API et l'UI
 
@@ -176,18 +177,23 @@ Routes principales :
 
 UI disponible sur `http://localhost:8501`.
 
+JupyterLab disponible sur `http://localhost:8888`.
+Le token de connexion est la valeur `JUPYTER_TOKEN` dans `.env`.
+
 Ordre recommande :
 
 1. `make deploy`
 2. `make init`
 3. ouvrir `http://localhost:8000` pour l'API
 4. ouvrir `http://localhost:8501` pour l'UI
+5. ouvrir `http://localhost:8888` pour JupyterLab
 
 L'interface affiche :
 
 - la liste des CSV presents dans MinIO
 - les metadonnees d'un dataset
 - un apercu des lignes du CSV selectionne
+- un notebook JupyterLab disponible dans le cluster pour l'exploration libre
 
 ## 🐛 Dépannage
 

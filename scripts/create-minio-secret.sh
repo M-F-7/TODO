@@ -20,4 +20,9 @@ for namespace in storage api; do
         --dry-run=client -o yaml | kubectl apply -f -
 done
 
+kubectl create secret generic jupyter-secret \
+    --from-literal=token=${JUPYTER_TOKEN:-changeme-jupyter-token} \
+    --namespace=jupyter \
+    --dry-run=client -o yaml | kubectl apply -f -
+
 echo "✓ Secret MinIO créé/mis à jour"

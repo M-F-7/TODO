@@ -20,6 +20,8 @@ spec:
         image: quay.io/jupyter/base-notebook:python-3.11.8
         imagePullPolicy: IfNotPresent
         env:
+        - name: JUPYTER_PORT
+          value: "8888"
         - name: JUPYTER_TOKEN
           valueFrom:
             secretKeyRef:

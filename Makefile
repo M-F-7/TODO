@@ -1,4 +1,4 @@
-.PHONY: help install cluster build-images deploy deploy-storage deploy-api deploy-ui deploy-jupyter init clean status logs logs-api logs-ui logs-jupyter stop start all
+.PHONY: help install cluster build-images deploy deploy-storage deploy-api deploy-ui deploy-jupyter run-ui init clean status logs logs-api logs-ui logs-jupyter stop start all
 
 # Variables
 CLUSTER_NAME=data-cluster
@@ -88,6 +88,9 @@ deploy-ui: build-images ## Déploie l UI Streamlit dans le cluster
 	@kubectl apply -f services/ui/service.yaml
 	@echo "✓ UI soumise au cluster sur http://localhost:8501"
 	@echo "Verification: kubectl get pods -n ui"
+
+run-ui: ## Lance l UI Streamlit en local (hors Kubernetes)
+	@API_BASE_URL=http://localhost:8000 uv run streamlit run src/ui/app.py --server.port 8502 --server.address 0.0.0.0
 
 deploy-jupyter: ## Déploie JupyterLab dans le cluster
 	@echo "Déploiement de JupyterLab..."

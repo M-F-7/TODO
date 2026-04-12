@@ -1,7 +1,6 @@
-import re
-from pathlib import Path
+import os
+from urllib.parse import quote
 
-import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
@@ -10,8 +9,7 @@ import streamlit as st
 st.set_page_config(layout="wide", page_title="Pilotage des couts sante")
 st.title("Carte France interactive pour prevision des couts")
 st.caption("Cliquez une region, puis un departement pour afficher les details (ages, sexes, pathologies, couts).")
-
-DATASETS_DIR = Path("datasets")
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 if "selected_region" not in st.session_state:
     st.session_state.selected_region = None
@@ -19,141 +17,20 @@ if "selected_dep" not in st.session_state:
     st.session_state.selected_dep = None
 
 
-REGIONS = {
-    "Île-de-France": ["75", "77", "78", "91", "92", "93", "94", "95"],
-    "Normandie": ["14", "27", "50", "61", "76"],
-    "Bretagne": ["22", "29", "35", "56"],
-    "Grand Est": ["08", "10", "51", "52", "54", "55", "57", "67", "68", "88"],
-    "Occitanie": ["09", "11", "12", "30", "31", "32", "34", "46", "48", "65", "66", "81", "82"],
-    "Auvergne-Rhône-Alpes": ["01", "03", "07", "15", "26", "38", "42", "43", "63", "69", "73", "74"],
-    "Provence-Alpes-Côte d'Azur": ["04", "05", "06", "13", "83", "84"],
-    "Nouvelle-Aquitaine": ["16", "17", "19", "23", "24", "33", "40", "47", "64", "79", "86", "87"],
-    "Pays de la Loire": ["44", "49", "53", "72", "85"],
-    "Centre-Val de Loire": ["18", "28", "36", "37", "41", "45"],
-    "Bourgogne-Franche-Comté": ["21", "25", "39", "58", "70", "71", "89", "90"],
-    "Hauts-de-France": ["02", "59", "60", "62", "80"],
-    "Corse": ["2A", "2B"],
-}
-DEPARTMENT_TO_REGION = {dep: reg for reg, deps in REGIONS.items() for dep in deps}
+DROM_REGION_NAMES = {"Guadeloupe", "Martinique", "Guyane", "La Reunion", "La Réunion", "Mayotte"}
+DROM_DEP_PREFIXES = ("97", "98")
 
 
-def _clean_numeric(series: pd.Series) -> pd.Series:
-    return pd.to_numeric(
-        series.astype(str).str.replace(" ", "", regex=False).str.replace(",", ".", regex=False).str.replace("\u202f", "", regex=False),
-        errors="coerce",
-    )
 
-
-def _extract_dep_code(value: object) -> str | None:
-    if pd.isna(value):
-        return None
-    raw = str(value).strip().upper()
-    if not raw:
-        return None
-
-    if raw.startswith("2A") or raw.startswith("2B"):
-        return raw[:2]
-    if raw.startswith("97"):
-        return raw[:3]
-
-    digits = "".join(ch for ch in raw if ch.isdigit())
-    if len(digits) >= 2:
-        return digits[:2].zfill(2)
-    return None
-
-
-def _find_col(columns: list[str], patterns: list[str]) -> str | None:
-    lowered = {c.lower().strip(): c for c in columns}
-    for pattern in patterns:
-        regex = re.compile(pattern)
-        for col_lower, original in lowered.items():
-            if regex.search(col_lower):
-                return original
-    return None
-
-
-@st.cache_data
-def load_mortality_data() -> pd.DataFrame:
-    path = DATASETS_DIR / "Taux_de_mortalite.csv"
-    df = pd.read_csv(path, sep=",", encoding="utf-8")
-    df.columns = df.columns.str.strip()
-    df = df.rename(columns={"Unnamed: 0": "code_dep", "Departement": "departement", "Département": "departement"})
-    df["code_dep"] = df["code_dep"].astype(str).str.strip().str.upper()
-
-    mappings = {
-        "Taux de mortalité standard. des 0-64 ans en 2024 (prématuré) (en ‰)": "taux_premature",
-        "Taux de mortalite standard. des 0-64 ans en 2024 (premature) (en ‰)": "taux_premature",
-        "Taux brut de mortalité en 2024 (en ‰)": "taux_brut",
-        "Taux brut de mortalité des femmes en 2024 (en ‰)": "taux_femmes",
-        "Taux brut de mortalité des hommes en 2024 (en ‰)": "taux_hommes",
-        "Nombre de décès domiciliés en 2024": "deces_2024",
-    }
-    df = df.rename(columns=mappings)
-
-    for metric in ["taux_premature", "taux_brut", "taux_femmes", "taux_hommes", "deces_2024"]:
-        if metric in df.columns:
-            df[metric] = _clean_numeric(df[metric])
-
-    df["region"] = df["code_dep"].map(DEPARTMENT_TO_REGION)
-    return df
-
-
-@st.cache_data
-def load_annuaire_health_data() -> pd.DataFrame:
-    path = DATASETS_DIR / "annuaire-des-entreprises-etablissements-08_04_2026.csv"
-    usecols = [
-        "codeCommuneEtablissement",
-        "sexeUniteLegale",
-        "trancheEffectifsEtablissement",
-        "activitePrincipaleEtablissement",
-        "activitePrincipaleNAF25Etablissement",
-    ]
-    df = pd.read_csv(path, usecols=usecols, dtype=str, low_memory=False)
-    df.columns = df.columns.str.strip()
-    df["code_dep"] = df["codeCommuneEtablissement"].map(_extract_dep_code)
-    return df
-
-
-@st.cache_data
-def load_effectifs_data() -> pd.DataFrame:
-    path = DATASETS_DIR / "effectifs.csv"
-    if not path.exists():
-        return pd.DataFrame()
-
-    header = pd.read_csv(path, nrows=0, low_memory=False)
-    cols = header.columns.tolist()
-
-    dep_col = _find_col(cols, [r"code[_ ]?dep", r"depart", r"code[_ ]?commune", r"codgeo", r"dep"])
-    age_col = _find_col(cols, [r"age", r"tranche", r"classe"])
-    sex_col = _find_col(cols, [r"sexe", r"genre"])
-    pathology_col = _find_col(cols, [r"patholog", r"affection", r"ald", r"malad", r"diagnos"])
-    cost_col = _find_col(cols, [r"cout", r"co[uû]t", r"depense", r"montant", r"rembours", r"charge"])
-
-    selected_cols = [c for c in [dep_col, age_col, sex_col, pathology_col, cost_col] if c]
-    if not selected_cols:
-        return pd.DataFrame()
-
-    df = pd.read_csv(path, usecols=selected_cols, dtype=str, low_memory=False)
-
-    renamed = {}
-    if dep_col:
-        renamed[dep_col] = "dep_source"
-    if age_col:
-        renamed[age_col] = "age"
-    if sex_col:
-        renamed[sex_col] = "sexe"
-    if pathology_col:
-        renamed[pathology_col] = "pathologie"
-    if cost_col:
-        renamed[cost_col] = "cout"
-    df = df.rename(columns=renamed)
-
-    if "dep_source" in df.columns:
-        df["code_dep"] = df["dep_source"].map(_extract_dep_code)
-    if "cout" in df.columns:
-        df["cout"] = _clean_numeric(df["cout"])
-
-    return df
+def api_get(path: str, **kwargs) -> dict:
+    response = requests.get(f"{API_BASE_URL}{path}", timeout=120, **kwargs)
+    if response.status_code == 404 and path.startswith("/analytics/"):
+        raise RuntimeError(
+            "API sans endpoints analytics. Redeploie l'API avec 'make deploy-api' "
+            "(ou 'make deploy-prod')."
+        )
+    response.raise_for_status()
+    return response.json()
 
 
 @st.cache_data
@@ -172,6 +49,33 @@ def load_geojson_regions() -> dict:
     return response.json()
 
 
+def _filter_metropole_regions_geojson(geojson: dict) -> dict:
+    features = []
+    for feature in geojson.get("features", []):
+        props = feature.get("properties", {})
+        name = str(props.get("nom", "")).strip()
+        code = str(props.get("code", "")).strip()
+        if name in DROM_REGION_NAMES:
+            continue
+        if code in {"01", "02", "03", "04", "06"}:
+            continue
+        features.append(feature)
+    return {"type": geojson.get("type", "FeatureCollection"), "features": features}
+
+
+def _filter_metropole_departments_geojson(geojson: dict, allowed_codes: set[str] | None = None) -> dict:
+    features = []
+    for feature in geojson.get("features", []):
+        props = feature.get("properties", {})
+        dep_code = str(props.get("code", "")).strip().upper()
+        if dep_code.startswith(DROM_DEP_PREFIXES):
+            continue
+        if allowed_codes is not None and dep_code not in allowed_codes:
+            continue
+        features.append(feature)
+    return {"type": geojson.get("type", "FeatureCollection"), "features": features}
+
+
 def _selected_location(selection: object) -> str | None:
     if not isinstance(selection, dict):
         return None
@@ -186,132 +90,112 @@ def _selected_location(selection: object) -> str | None:
     return None
 
 
-def _cost_projection(dep_row: pd.Series, dep_effectifs: pd.DataFrame) -> dict[str, float]:
-    deces = float(dep_row.get("deces_2024", 0) or 0)
-    taux_premature = float(dep_row.get("taux_premature", 0) or 0)
-
-    observed_cost = 0.0
-    if not dep_effectifs.empty and "cout" in dep_effectifs.columns:
-        observed_cost = float(dep_effectifs["cout"].dropna().sum())
-
-    # Proxy simple pour un ordre de grandeur local tant qu'on n'a pas un modele complet.
-    socle = observed_cost if observed_cost > 0 else deces * 12000
-    pressure_factor = 1 + (taux_premature / 10)
-    expected = socle * pressure_factor
-
-    return {
-        "socle": socle,
-        "expected": expected,
-        "low": expected * 0.9,
-        "high": expected * 1.15,
-    }
+def _series_to_rows(values: dict) -> list[dict]:
+    return [{"label": key, "count": val} for key, val in values.items()]
 
 
-def render_department_details(dep_code: str, mortality_df: pd.DataFrame, annuaire_df: pd.DataFrame, effectifs_df: pd.DataFrame) -> None:
-    dep_data = mortality_df[mortality_df["code_dep"] == dep_code]
-    if dep_data.empty:
-        st.warning("Aucune donnee trouvee pour ce departement.")
+@st.cache_data(ttl=120)
+def load_regions_analytics() -> list[dict]:
+    return api_get("/analytics/health/regions").get("items", [])
+
+
+@st.cache_data(ttl=120)
+def load_region_departments(region: str) -> list[dict]:
+    safe_region = quote(region, safe="")
+    return api_get(f"/analytics/health/regions/{safe_region}/departments").get("items", [])
+
+
+@st.cache_data(ttl=120)
+def load_department_details(dep_code: str) -> dict:
+    return api_get(f"/analytics/health/departments/{dep_code}")
+
+
+def render_department_details(dep_code: str) -> None:
+    try:
+        details = load_department_details(dep_code)
+    except requests.RequestException as exc:
+        st.error(f"Impossible de charger les details du departement {dep_code}: {exc}")
         return
+    row = details.get("department", {})
+    annuaire = details.get("annuaire", {})
+    effectifs = details.get("effectifs", {})
+    projection = details.get("projection", {})
 
-    row = dep_data.iloc[0]
     st.subheader(f"Departement {dep_code} - {row.get('departement', 'N/A')}")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Taux premature (0-64)", f"{row.get('taux_premature', float('nan')):.2f} ‰")
-    c2.metric("Taux brut", f"{row.get('taux_brut', float('nan')):.2f} ‰")
-    c3.metric("Taux femmes", f"{row.get('taux_femmes', float('nan')):.2f} ‰")
-    c4.metric("Taux hommes", f"{row.get('taux_hommes', float('nan')):.2f} ‰")
+    c1.metric("Taux premature (0-64)", f"{float(row.get('taux_premature', 0) or 0):.2f} ‰")
+    c2.metric("Taux brut", f"{float(row.get('taux_brut', 0) or 0):.2f} ‰")
+    c3.metric("Taux femmes", f"{float(row.get('taux_femmes', 0) or 0):.2f} ‰")
+    c4.metric("Taux hommes", f"{float(row.get('taux_hommes', 0) or 0):.2f} ‰")
 
-    deces = row.get("deces_2024")
-    if pd.notna(deces):
-        st.info(f"Deces domicilies 2024: {int(deces):,}".replace(",", " "))
-
-    dep_annuaire = annuaire_df[annuaire_df["code_dep"] == dep_code]
-    if not effectifs_df.empty and "code_dep" in effectifs_df.columns:
-        dep_effectifs = effectifs_df[effectifs_df["code_dep"] == dep_code]
-    else:
-        dep_effectifs = pd.DataFrame()
+    st.info(f"Deces domicilies 2024: {int(row.get('deces_2024', 0) or 0):,}".replace(",", " "))
 
     left, right = st.columns(2)
 
     with left:
         st.markdown("### Structures de sante (annuaire)")
-        st.metric("Nb etablissements", f"{len(dep_annuaire):,}".replace(",", " "))
-
-        if not dep_annuaire.empty:
-            sexes = dep_annuaire["sexeUniteLegale"].replace({"": "ND", "[ND]": "ND"}).fillna("ND")
-            sexe_dist = sexes.value_counts().rename_axis("sexe").reset_index(name="count")
-            st.dataframe(sexe_dist, use_container_width=True, hide_index=True)
-
-            effectif_dist = (
-                dep_annuaire["trancheEffectifsEtablissement"]
-                .replace({"": "ND", "[ND]": "ND"})
-                .fillna("ND")
-                .value_counts()
-                .head(8)
-                .rename_axis("tranche")
-                .reset_index(name="count")
-            )
-            st.dataframe(effectif_dist, use_container_width=True, hide_index=True)
+        st.metric("Nb etablissements", f"{int(annuaire.get('etablissements', 0)):,}".replace(",", " "))
+        st.dataframe(_series_to_rows(annuaire.get("sexes", {})), use_container_width=True, hide_index=True)
+        st.dataframe(_series_to_rows(annuaire.get("tranches_effectifs", {})), use_container_width=True, hide_index=True)
 
     with right:
         st.markdown("### Population / couts pathologies (effectifs.csv)")
-        if dep_effectifs.empty:
+        if int(effectifs.get("rows", 0)) == 0:
             st.warning("Aucune ligne exploitable trouvee dans effectifs.csv pour ce departement.")
         else:
-            if "age" in dep_effectifs.columns:
-                age_dist = dep_effectifs["age"].fillna("ND").value_counts().head(12).rename_axis("age").reset_index(name="count")
-                st.dataframe(age_dist, use_container_width=True, hide_index=True)
+            st.dataframe(_series_to_rows(effectifs.get("ages", {})), use_container_width=True, hide_index=True)
+            st.dataframe(_series_to_rows(effectifs.get("sexes", {})), use_container_width=True, hide_index=True)
+            st.dataframe(_series_to_rows(effectifs.get("pathologies", {})), use_container_width=True, hide_index=True)
+            st.metric("Cout observe (somme)", f"{float(effectifs.get('cout_total', 0) or 0):,.0f} EUR".replace(",", " "))
 
-            if "sexe" in dep_effectifs.columns:
-                sex_dist = dep_effectifs["sexe"].fillna("ND").value_counts().rename_axis("sexe").reset_index(name="count")
-                st.dataframe(sex_dist, use_container_width=True, hide_index=True)
-
-            if "pathologie" in dep_effectifs.columns:
-                patho_dist = (
-                    dep_effectifs["pathologie"]
-                    .fillna("ND")
-                    .value_counts()
-                    .head(10)
-                    .rename_axis("pathologie")
-                    .reset_index(name="count")
-                )
-                st.dataframe(patho_dist, use_container_width=True, hide_index=True)
-
-            if "cout" in dep_effectifs.columns:
-                st.metric("Cout observe (somme)", f"{dep_effectifs['cout'].dropna().sum():,.0f} EUR".replace(",", " "))
-
-    projection = _cost_projection(row, dep_effectifs)
     st.markdown("### Prevision de cout annuel")
     p1, p2, p3 = st.columns(3)
-    p1.metric("Scenario bas", f"{projection['low']:,.0f} EUR".replace(",", " "))
-    p2.metric("Scenario central", f"{projection['expected']:,.0f} EUR".replace(",", " "))
-    p3.metric("Scenario haut", f"{projection['high']:,.0f} EUR".replace(",", " "))
+    p1.metric("Scenario bas", f"{float(projection.get('low', 0) or 0):,.0f} EUR".replace(",", " "))
+    p2.metric("Scenario central", f"{float(projection.get('expected', 0) or 0):,.0f} EUR".replace(",", " "))
+    p3.metric("Scenario haut", f"{float(projection.get('high', 0) or 0):,.0f} EUR".replace(",", " "))
     st.caption("Projection indicative basee sur mortalite + cout observe (si present). A raffiner avec un modele metier.")
 
 
-mortality_df = load_mortality_data()
-annuaire_df = load_annuaire_health_data()
-effectifs_df = load_effectifs_data()
-geojson_dep = load_geojson_dep()
-geojson_reg = load_geojson_regions()
+try:
+    api_get("/health")
+    geojson_dep = load_geojson_dep()
+    geojson_reg = _filter_metropole_regions_geojson(load_geojson_regions())
+    regions_rows = [
+        row for row in load_regions_analytics()
+        if row.get("region") and row.get("region") not in DROM_REGION_NAMES
+    ]
+except RuntimeError as exc:
+    st.error(str(exc))
+    st.info("Commande de correction: make deploy-api")
+    st.stop()
+except requests.RequestException as exc:
+    st.error(f"API inaccessible ({API_BASE_URL}): {exc}")
+    st.stop()
 
-sidebar_choices = ["France entiere"] + sorted(mortality_df["region"].dropna().unique())
-region_choice = st.sidebar.selectbox("Choisir une region", sidebar_choices)
+with st.sidebar:
+    st.subheader("Configuration")
+    st.code(API_BASE_URL)
+
+sidebar_choices = ["France entiere"] + sorted([row.get("region") for row in regions_rows if row.get("region")])
+default_region = st.session_state.selected_region if st.session_state.selected_region in sidebar_choices else "France entiere"
+region_choice = st.sidebar.selectbox(
+    "Choisir une region",
+    sidebar_choices,
+    index=sidebar_choices.index(default_region),
+)
 if region_choice == "France entiere":
-    st.session_state.selected_region = None
+    if st.session_state.selected_region is not None:
+        st.session_state.selected_region = None
+        st.session_state.selected_dep = None
 else:
-    st.session_state.selected_region = region_choice
-    st.session_state.selected_dep = None
+    if st.session_state.selected_region != region_choice:
+        st.session_state.selected_region = region_choice
+        st.session_state.selected_dep = None
 
 if st.session_state.selected_region is None:
-    region_df = mortality_df.groupby("region", as_index=False).agg(
-        taux_premature=("taux_premature", "mean"),
-        deces_2024=("deces_2024", "sum"),
-    )
-
     fig_region = px.choropleth(
-        region_df,
+        regions_rows,
         geojson=geojson_reg,
         locations="region",
         featureidkey="properties.nom",
@@ -325,20 +209,30 @@ if st.session_state.selected_region is None:
 
     event = st.plotly_chart(fig_region, key="map_regions", on_select="rerun", use_container_width=True)
     clicked_region = _selected_location(event)
-    if clicked_region:
+    if clicked_region and clicked_region != st.session_state.selected_region:
         st.session_state.selected_region = clicked_region
+        st.session_state.selected_dep = None
         st.write(f"Region cliquee: {clicked_region}")
         st.rerun()
-
 else:
     region = st.session_state.selected_region
     st.subheader(f"Region selectionnee: {region}")
     st.write(f"Region cliquee: {region}")
 
-    region_deps = mortality_df[mortality_df["region"] == region].copy()
+    region_deps = load_region_departments(region)
+    allowed_dep_codes = {
+        str(row.get("code_dep", "")).strip().upper()
+        for row in region_deps
+        if row.get("code_dep")
+    }
+    geojson_dep_region = _filter_metropole_departments_geojson(
+        geojson_dep,
+        allowed_codes=allowed_dep_codes,
+    )
+
     fig_dep = px.choropleth(
         region_deps,
-        geojson=geojson_dep,
+        geojson=geojson_dep_region,
         locations="code_dep",
         featureidkey="properties.code",
         color="taux_premature",
@@ -351,25 +245,19 @@ else:
 
     dep_event = st.plotly_chart(fig_dep, key="map_deps", on_select="rerun", use_container_width=True)
     clicked_dep = _selected_location(dep_event)
-    if clicked_dep:
+    if clicked_dep and clicked_dep != st.session_state.selected_dep:
         st.session_state.selected_dep = clicked_dep
-        st.rerun()
 
     manual_dep = st.selectbox(
         "Ou selection manuelle du departement",
-        options=[""] + sorted(region_deps["code_dep"].dropna().unique().tolist()),
+        options=[""] + sorted([row.get("code_dep") for row in region_deps if row.get("code_dep")]),
         format_func=lambda x: "Choisir..." if x == "" else x,
     )
     if manual_dep:
         st.session_state.selected_dep = manual_dep
 
     if st.session_state.selected_dep:
-        render_department_details(
-            dep_code=st.session_state.selected_dep,
-            mortality_df=mortality_df,
-            annuaire_df=annuaire_df,
-            effectifs_df=effectifs_df,
-        )
+        render_department_details(dep_code=st.session_state.selected_dep)
 
     if st.button("Retour a la carte des regions"):
         st.session_state.selected_region = None

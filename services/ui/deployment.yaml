@@ -17,6 +17,14 @@ spec:
       - name: ui
         image: docker.io/library/datasets-ui:local
         imagePullPolicy: Never
+        command: ["uv"]
+        args:
+        - run
+        - streamlit
+        - run
+        - src/ui/mortalite.py
+        - --server.address=0.0.0.0
+        - --server.port=8501
         env:
         - name: API_BASE_URL
           value: http://api.api.svc.cluster.local:8000

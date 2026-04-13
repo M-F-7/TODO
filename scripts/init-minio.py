@@ -36,6 +36,7 @@ def main():
 
     # Upload des CSV du dossier datasets s'ils existent localement.
     csv_files = [
+        "datasets/Taux_de_mortalite.csv",
         "datasets/effectifs.csv",
         "datasets/annuaire-des-entreprises-etablissements-10_04_2026.csv",
         "datasets/C03-ISD_Taux_de_mortalite.csv",

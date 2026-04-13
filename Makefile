@@ -1,9 +1,14 @@
-.PHONY: help install cluster build-images deploy deploy-storage deploy-api deploy-ui deploy-jupyter init clean status logs logs-api logs-ui logs-jupyter stop start all
+.PHONY: help install cluster build-images build-images-prod deploy deploy-prod deploy-storage deploy-api deploy-api-prod deploy-ui deploy-ui-prod deploy-jupyter run-ui init clean status logs logs-api logs-ui logs-jupyter stop start all
 
 # Variables
 CLUSTER_NAME=data-cluster
-API_IMAGE=docker.io/library/datasets-api:local
-UI_IMAGE=docker.io/library/datasets-ui:local
+REGISTRY?=docker.io/library
+IMAGE_TAG?=local
+API_IMAGE=$(REGISTRY)/datasets-api:$(IMAGE_TAG)
+UI_IMAGE=$(REGISTRY)/datasets-ui:$(IMAGE_TAG)
+PROD_IMAGE_TAG?=prod
+API_IMAGE_PROD=$(REGISTRY)/datasets-api:$(PROD_IMAGE_TAG)
+UI_IMAGE_PROD=$(REGISTRY)/datasets-ui:$(PROD_IMAGE_TAG)
 export KUBECONFIG=$(HOME)/.config/k3d/kubeconfig-$(CLUSTER_NAME).yaml
 BLUE=\033[1;34m
 GREEN=\033[1;32m
@@ -72,22 +77,61 @@ build-images: ## Build les images Docker de l'API et de l'UI
 	@k3d image import -c $(CLUSTER_NAME) $(API_IMAGE) $(UI_IMAGE)
 	@echo "✓ Images buildées et importées dans k3d"
 
+build-images-prod: ## Build les images prod (sans import k3d)
+	@echo "Build des images prod..."
+	@docker build -f src/backend/Dockerfile -t $(API_IMAGE_PROD) .
+	@docker build -f src/ui/Dockerfile -t $(UI_IMAGE_PROD) .
+	@echo "✓ Images prod buildées: $(API_IMAGE_PROD) et $(UI_IMAGE_PROD)"
+
 deploy-api: build-images ## Déploie l API FastAPI dans le cluster
 	@echo "Déploiement de l'API..."
 	@kubectl apply -f infrastructure/base/namespace.yaml
 	@./scripts/create-minio-secret.sh
 	@kubectl apply -f services/api/deployment.yaml
 	@kubectl apply -f services/api/service.yaml
+	@kubectl -n api rollout restart deployment/api
+	@kubectl -n api rollout status deployment/api --timeout=180s
 	@echo "✓ API soumise au cluster sur http://localhost:8000"
 	@echo "Verification: kubectl get pods -n api"
+
+deploy-api-prod: ## Déploie l API avec image prod
+	@echo "Déploiement API prod..."
+	@kubectl apply -f infrastructure/base/namespace.yaml
+	@./scripts/create-minio-secret.sh
+	@kubectl apply -f services/api/deployment.yaml
+	@kubectl apply -f services/api/service.yaml
+	@kubectl -n api set image deployment/api api=$(API_IMAGE_PROD)
+	@kubectl -n api patch deployment api --type='json' -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]'
+	@echo "✓ API prod soumise au cluster avec image $(API_IMAGE_PROD)"
 
 deploy-ui: build-images ## Déploie l UI Streamlit dans le cluster
 	@echo "Déploiement de l'UI..."
 	@kubectl apply -f infrastructure/base/namespace.yaml
 	@kubectl apply -f services/ui/deployment.yaml
 	@kubectl apply -f services/ui/service.yaml
+	@kubectl -n ui rollout restart deployment/ui
+	@kubectl -n ui rollout status deployment/ui --timeout=180s
 	@echo "✓ UI soumise au cluster sur http://localhost:8501"
 	@echo "Verification: kubectl get pods -n ui"
+
+deploy-ui-prod: ## Déploie l UI avec image prod
+	@echo "Déploiement UI prod..."
+	@kubectl apply -f infrastructure/base/namespace.yaml
+	@kubectl apply -f services/ui/deployment.yaml
+	@kubectl apply -f services/ui/service.yaml
+	@kubectl -n ui set image deployment/ui ui=$(UI_IMAGE_PROD)
+	@kubectl -n ui patch deployment ui --type='json' -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]'
+	@echo "✓ UI prod soumise au cluster avec image $(UI_IMAGE_PROD)"
+
+run-ui: ## Lance l UI Streamlit en local (hors Kubernetes)
+	@API_BASE_URL=http://localhost:8000 uv run streamlit run src/ui/mortalite.py --server.port 8502 --server.address 0.0.0.0
+
+deploy-prod: ## Déploie MinIO + API/UI en mode prod
+	@$(MAKE) deploy-storage
+	@$(MAKE) build-images-prod
+	@$(MAKE) deploy-api-prod
+	@$(MAKE) deploy-ui-prod
+	@$(MAKE) deploy-jupyter
 
 deploy-jupyter: ## Déploie JupyterLab dans le cluster
 	@echo "Déploiement de JupyterLab..."

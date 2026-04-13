@@ -60,27 +60,108 @@ from dotenv import load_dotenv
 #         return ","
 
 
-# def _read_csv(name: str, **kwargs) -> pd.DataFrame:
-#     client = get_minio_client()
-#     bucket = get_bucket_name()
-#     object_name = _dataset_object_name(name)
+def _read_csv(name: str, **kwargs) -> pd.DataFrame:
+    client = get_minio_client()
+    bucket = get_bucket_name()
+    object_name = _dataset_object_name(name)
 
-#     with closing(client.get_object(bucket, object_name)) as response:
-#         sample = response.read(4096)
+    with closing(client.get_object(bucket, object_name)) as response:
+        sample = response.read(4096)
 
-#     separator = _detect_separator(sample.decode("utf-8", errors="ignore"))
+    separator = _detect_separator(sample.decode("utf-8", errors="ignore"))
 
-#     with closing(client.get_object(bucket, object_name)) as response:
-#         text_stream = io.TextIOWrapper(response, encoding="utf-8")
-#         return pd.read_csv(text_stream, sep=separator, **kwargs)
+    with closing(client.get_object(bucket, object_name)) as response:
+        # Read bytes fully before parsing to avoid parser reads on a closed socket stream.
+        payload = response.read()
+
+    text_stream = io.StringIO(payload.decode("utf-8", errors="replace"))
+    return pd.read_csv(text_stream, sep=separator, **kwargs)
 
 
-# def get_dataset_metadata(name: str) -> dict:
-#     client = get_minio_client()
-#     bucket = get_bucket_name()
-#     object_name = _dataset_object_name(name)
-#     stat = client.stat_object(bucket, object_name)
-#     header = _read_csv(name, nrows=0)
+def read_dataset(name: str, **kwargs):
+    """Read a CSV dataset from MinIO with separator auto-detection."""
+    return _read_csv(name, **kwargs)
+
+
+def iter_dataset_chunks(name: str, chunksize: int = 100_000, **kwargs):
+    """Iterate over a CSV dataset from MinIO without loading it all in memory."""
+    client = get_minio_client()
+    bucket = get_bucket_name()
+    object_name = _dataset_object_name(name)
+
+    with closing(client.get_object(bucket, object_name)) as response:
+        sample = response.read(4096)
+
+    separator = _detect_separator(sample.decode("utf-8", errors="ignore"))
+
+    response = client.get_object(bucket, object_name)
+    text_stream = io.TextIOWrapper(response, encoding="utf-8")
+    try:
+        reader = pd.read_csv(text_stream, sep=separator, chunksize=chunksize, **kwargs)
+        for chunk in reader:
+            yield chunk
+    finally:
+        try:
+            text_stream.detach()
+        except Exception:
+            pass
+        response.close()
+
+
+def iter_dataset_rows(name: str):
+    """Iterate over CSV rows from MinIO as dictionaries without loading the file in memory."""
+    client = get_minio_client()
+    bucket = get_bucket_name()
+    object_name = _dataset_object_name(name)
+
+    with closing(client.get_object(bucket, object_name)) as response:
+        sample = response.read(4096)
+
+    separator = _detect_separator(sample.decode("utf-8", errors="ignore"))
+
+    response = client.get_object(bucket, object_name)
+    try:
+        header = None
+        buffer = b""
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            buffer += chunk
+            lines = buffer.split(b"\n")
+            buffer = lines.pop()
+
+            for raw_line in lines:
+                line = raw_line.rstrip(b"\r").decode("utf-8", errors="replace")
+                if not line:
+                    continue
+                if header is None:
+                    header = next(csv.reader([line], delimiter=separator), None)
+                    continue
+                values = next(csv.reader([line], delimiter=separator), None)
+                if values is None:
+                    continue
+                yield dict(zip(header, values))
+
+        if buffer:
+            line = buffer.rstrip(b"\r").decode("utf-8", errors="replace")
+            if line:
+                if header is None:
+                    header = next(csv.reader([line], delimiter=separator), None)
+                else:
+                    values = next(csv.reader([line], delimiter=separator), None)
+                    if values is not None:
+                        yield dict(zip(header, values))
+    finally:
+        response.close()
+
+
+def get_dataset_metadata(name: str) -> dict:
+    client = get_minio_client()
+    bucket = get_bucket_name()
+    object_name = _dataset_object_name(name)
+    stat = client.stat_object(bucket, object_name)
+    header = _read_csv(name, nrows=0)
 
 #     return {
 #         "name": name,

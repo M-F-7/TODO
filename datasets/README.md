@@ -4,6 +4,7 @@ Ce dossier contient les fichiers de donnees source du projet.
 
 ## Fichiers attendus
 
+- `Taux_de_mortalite.csv`
 - `effectifs.csv`
 - `annuaire-des-entreprises-etablissements-08_04_2026.csv`
 

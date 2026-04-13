@@ -9,4 +9,4 @@ COPY src ./src
 
 EXPOSE 8501
 
-CMD ["uv", "run", "streamlit", "run", "src/ui/mortalite.py", "--server.address=0.0.0.0", "--server.port=8501"]
+CMD ["uv", "run", "streamlit", "run", "src/ui/app2.py", "--server.address=0.0.0.0", "--server.port=8501"]

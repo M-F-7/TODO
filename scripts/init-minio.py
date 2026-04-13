@@ -38,9 +38,7 @@ def main():
     csv_files = [
         "datasets/Taux_de_mortalite.csv",
         "datasets/effectifs.csv",
-        "datasets/annuaire-des-entreprises-etablissements-10_04_2026.csv",
-        "datasets/C03-ISD_Taux_de_mortalite.csv",
-        "datasets/depenses.csv",
+        "datasets/annuaire-des-entreprises-etablissements-08_04_2026.csv",
     ]
 
     for csv_file in csv_files:
